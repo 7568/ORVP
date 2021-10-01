@@ -18,3 +18,5 @@ conda install -c conda-forge tqdm librosa tsfresh
 conda install -c conda-forge librosa
 conda install -c conda-forge tsfresh
 conda install -c anaconda seaborn
+conda install -c pytorch torchvision=0.9.0
+conda install -c conda-forge tensorboard

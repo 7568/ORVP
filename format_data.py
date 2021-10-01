@@ -381,6 +381,7 @@ def predict():
     test_ds[['row_id', 'target']].to_csv('submission.csv', index=False)
 
 
+
 if __name__ == '__main__':
     logging.debug('-------- start -----------')
     # print("CPU的核数为：{}".format(cpu_count()))
@@ -420,5 +421,5 @@ if __name__ == '__main__':
 
     input_features_num = 11
 
-    start_train()
+    # start_train()
     print('============= finish =============')

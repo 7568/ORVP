@@ -147,16 +147,19 @@ class LSTMModel(nn.Module):
         # self.encoder = nn.Embedding(ntoken, ninp)
         self.rnn = nn.LSTM(ninp + input_features_num, nhid + input_features_num, nlayers, dropout=dropout,
                            batch_first=True, bidirectional=True)
-        self.regress_rnn = nn.Linear(2 * nhid + 2 * input_features_num, 1)
+        self.regress_rnn = nn.Sequential(nn.Linear(2 * nhid + 2 * input_features_num, 1), nn.Sigmoid())
         self.decoder = nn.Sequential(
+            nn.BatchNorm1d(3 * nhid + 2 * input_features_num),
             nn.Linear(3 * nhid + 2 * input_features_num, nhid + input_features_num),
             nn.ReLU(),
             nn.Dropout(0.2),
+            nn.BatchNorm1d(nhid + input_features_num),
             nn.Linear(nhid + input_features_num, ntoken),
             nn.ReLU(),
             nn.Dropout(0.1),
+            nn.BatchNorm1d(ntoken),
             nn.Linear(ntoken, 1),
-            nn.LogSigmoid()
+            nn.Sigmoid()
         )
         self.self_attention = nn.Sequential(
             nn.Linear(3 * nhid + 2 * input_features_num, 10 * (nhid + input_features_num)),
@@ -186,7 +189,7 @@ class LSTMModel(nn.Module):
             nn.Conv1d(in_channels=600, out_channels=nhid, kernel_size=3),
             nn.ReLU(),  # 1
         )
-        self.regress_conv = nn.Linear(nhid, 1)
+        self.regress_conv = nn.Sequential(nn.Linear(nhid, 1), nn.ReLU(), nn.Sigmoid())
         self.linear_relu_stack = nn.Sequential(
             nn.Linear(input_features_num, ntoken),
             nn.Dropout(0.1),
@@ -219,7 +222,7 @@ class LSTMModel(nn.Module):
         # output = self.drop(output)
         new_logits = torch.mul(new_logits, self.self_attention(new_logits))
         # decoded_out = self.decoder(new_logits)
-        decoded_out = torch.mul(self.decoder(new_logits),-1)
+        decoded_out = self.decoder(new_logits)
         # decoded_2 = self.decoder_2(decoded_1)
         return regress_conv_out, regress_rnn_out, decoded_out
 
@@ -232,7 +235,13 @@ class LSTMModel(nn.Module):
 # dataloader = DataLoader(transformed_dataset, batch_size=4,
 #                         shuffle=True, num_workers=0)
 def rmspe(y_true, y_pred):
-    return np.sqrt(np.mean(np.square((y_true - y_pred) / y_true)))
+    rms = np.sqrt(np.mean(np.square((y_true - y_pred) / y_true)))
+    if rms > 200:
+        logging.warning(f'rms : {rms}')
+        logging.warning(f'y_true : {y_true}')
+        logging.warning(f'y_pred : {y_pred}')
+
+    return rms
 
 
 def RMSPELoss(y_pred, y_true):
@@ -289,6 +298,9 @@ def train_bach(epoch):
         trade_train_parquet = trade_train_dict.get(stock_id)
         trade_train_ = pd.read_parquet(trade_train_parquet)
         book_train = pd.read_parquet(stock_fnmame)
+        loss_0_each_stock = []
+        loss_1_each_stock = []
+        loss_2_each_stock = []
         loss_each_stock = []
         output_each_stock = []
         target_each_stock = []
@@ -316,26 +328,37 @@ def train_bach(epoch):
             target_0 = []
             for time_id in time_ids:
                 input_0.append(each_stock_train_data[time_id]['input_'])
-                target_0.append(each_stock_train_data[time_id]['target_'])
+                target_0.append([each_stock_train_data[time_id]['target_']])
 
             input_1 = torch.tensor(input_0, dtype=torch.float32, requires_grad=True).to(device)
             target_ = torch.tensor(target_0, dtype=torch.float32).to(device)
             conv_out, rnn_out, output_2 = lstmmodel(input_1)
-            loss_2 = 0.1 * RMSPELoss(conv_out, target_) + 0.1 * RMSPELoss(rnn_out, target_) + RMSPELoss(output_2,
-                                                                                                        target_)
+            loss_0 = criterion(conv_out, target_)
+            loss_1 = criterion(rnn_out, target_)
+            loss_2 = RMSPELoss(output_2, target_)
+            loss_ = 0.1 * loss_0 + 0.1 * loss_1 + loss_2
             optimizer_2.zero_grad()
-            loss_2.backward(retain_graph=True)
+            loss_.backward(retain_graph=True)
             optimizer_2.step()
             output_each_stock.append(output_2.cpu().detach().numpy().ravel())
-            target_each_stock.append(np.array(target_0))
-            loss_each_stock.append(loss_2.item())
+            target_each_stock.append(np.array(target_0).ravel())
+            loss_0_each_stock.append(loss_0.item())
+            loss_1_each_stock.append(loss_1.item())
+            loss_2_each_stock.append(loss_2.item())
+            loss_each_stock.append(loss_.item())
 
+        mean_loss_0 = np.mean(loss_0_each_stock)
+        mean_loss_1 = np.mean(loss_1_each_stock)
+        mean_loss_2 = np.mean(loss_2_each_stock)
         mean_loss = np.mean(loss_each_stock)
         logging.debug(f'epoch = {epoch} , stock_id = {stock_id} , loss_each_stock : {mean_loss}')
         rmspe_ = rmspe(np.array(output_each_stock), np.array(target_each_stock))
         logging.debug(
             f'epoch = {epoch} , stock_id = {stock_id} , rmspe each stock : {rmspe_}')
         # loss_all.append(np.mean(loss_each_stock))
+        writer.add_scalar('V2-LOSS_0', mean_loss_0, writer.count)
+        writer.add_scalar('V2-LOSS_1', mean_loss_1, writer.count)
+        writer.add_scalar('V2-LOSS_2', mean_loss_2, writer.count)
         writer.add_scalar('V2-LOSS', mean_loss, writer.count)
         writer.add_scalar('V2-rmspe', rmspe_, writer.count)
         writer.count += 1
