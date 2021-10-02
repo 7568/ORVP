@@ -147,7 +147,11 @@ class LSTMModel(nn.Module):
         # self.encoder = nn.Embedding(ntoken, ninp)
         self.rnn = nn.LSTM(ninp + input_features_num, nhid + input_features_num, nlayers, dropout=dropout,
                            batch_first=True, bidirectional=True)
-        self.regress_rnn = nn.Sequential(nn.Linear(2 * nhid + 2 * input_features_num, 1), nn.Sigmoid())
+        self.regress_rnn = nn.Sequential(
+            nn.BatchNorm1d(2 * nhid + 2 * input_features_num),
+            nn.Linear(2 * nhid + 2 * input_features_num, 1),
+            nn.Sigmoid()
+        )
         self.decoder = nn.Sequential(
             nn.BatchNorm1d(3 * nhid + 2 * input_features_num),
             nn.Linear(3 * nhid + 2 * input_features_num, nhid + input_features_num),
@@ -189,7 +193,11 @@ class LSTMModel(nn.Module):
             nn.Conv1d(in_channels=600, out_channels=nhid, kernel_size=3),
             nn.ReLU(),  # 1
         )
-        self.regress_conv = nn.Sequential(nn.Linear(nhid, 1), nn.ReLU(), nn.Sigmoid())
+        self.regress_conv = nn.Sequential(
+            nn.BatchNorm1d(nhid),
+            nn.Linear(nhid, 1),
+            nn.Sigmoid()
+        )
         self.linear_relu_stack = nn.Sequential(
             nn.Linear(input_features_num, ntoken),
             nn.Dropout(0.1),
@@ -234,13 +242,8 @@ class LSTMModel(nn.Module):
 
 # dataloader = DataLoader(transformed_dataset, batch_size=4,
 #                         shuffle=True, num_workers=0)
-def rmspe(y_true, y_pred):
+def rmspe(y_pred,y_true):
     rms = np.sqrt(np.mean(np.square((y_true - y_pred) / y_true)))
-    if rms > 200:
-        logging.warning(f'rms : {rms}')
-        logging.warning(f'y_true : {y_true}')
-        logging.warning(f'y_pred : {y_pred}')
-
     return rms
 
 
@@ -290,6 +293,7 @@ def process_test_bach(time_id, ARGS):
 
 
 def train_bach(epoch):
+    # lstmmodel.load_state_dict(torch.load('train_out/model_weights_240.pth'))
     full_seconds_in_bucket = {'seconds_in_bucket': np.arange(600)}  # seconds_in_bucket最大是600，训练数据中不连续，这里将他们连起来
     full_seconds_in_bucket = pd.DataFrame(full_seconds_in_bucket)
     # lstmmodel.zero_grad()
@@ -336,7 +340,7 @@ def train_bach(epoch):
             loss_0 = criterion(conv_out, target_)
             loss_1 = criterion(rnn_out, target_)
             loss_2 = RMSPELoss(output_2, target_)
-            loss_ = 0.1 * loss_0 + 0.1 * loss_1 + loss_2
+            loss_ = torch.mul(0.1, loss_0) + torch.mul(0.1, loss_1) + loss_2
             optimizer_2.zero_grad()
             loss_.backward(retain_graph=True)
             optimizer_2.step()
@@ -378,7 +382,7 @@ def start_train():
 
 
 def predict():
-    lstmmodel = torch.load_state_dict(torch.load('train_out/model_weights_24.pth'))
+
     full_seconds_in_bucket = {'seconds_in_bucket': np.arange(600)}
     full_seconds_in_bucket = pd.DataFrame(full_seconds_in_bucket)
     # lstmmodel.zero_grad()
@@ -425,7 +429,6 @@ if __name__ == '__main__':
     TRADE_TRAIN_PATH = DATA_PATH + 'trade_train.parquet'
     BOOK_TEST_PATH = DATA_PATH + 'book_test.parquet'
     TRADE_TEST_PATH = DATA_PATH + 'trade_test.parquet'
-    CHECKPOINT = './model_checkpoint/model_01'
 
     train_ds = pd.read_csv(os.path.join(DATA_PATH, 'train.csv'))
     test_ds = pd.read_csv(os.path.join(DATA_PATH, 'test.csv'))
@@ -451,13 +454,11 @@ if __name__ == '__main__':
         nhid=input_features_num * 10,
         nlayers=5,
     ).to(device)
-    # lstmmodel = nn.DataParallel(lstmmodel).to(device)
+    # lstmmodel.load_state_dict(torch.load('train_out/model_weights_2.pth'))
+    # lstmmodel.eval()
     print(lstmmodel)
-    # criterion = nn.BCEWithLogitsLoss()
-    # optimizer_1 = optim.SGD(mlnn.parameters(), lr=0.1)
-    # optimizer_2 = optim.Adam(lstmmodel.parameters(), lr=0.0001)
     criterion = nn.MSELoss()
-    optimizer_2 = optim.Adam(lstmmodel.parameters(), lr=0.0001)
+    optimizer_2 = optim.Adam(lstmmodel.parameters(), lr=0.00001)
     writer = SummaryWriter()
     writer.count = 1
     # predict()
